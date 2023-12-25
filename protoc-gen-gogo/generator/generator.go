@@ -35,9 +35,9 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 /*
-	The code generator for the plugin for the Google protocol buffer compiler.
-	It generates Go code from the protocol buffer description files read by the
-	main routine.
+The code generator for the plugin for the Google protocol buffer compiler.
+It generates Go code from the protocol buffer description files read by the
+main routine.
 */
 package generator
 
@@ -1605,6 +1605,7 @@ func (g *Generator) generateEnum(enum *EnumDescriptor) {
 // The tag is a string like "varint,2,opt,name=fieldname,def=7" that
 // identifies details of the field for the protocol buffer marshaling and unmarshaling
 // code.  The fields are:
+//
 //	wire encoding
 //	protocol tag number
 //	opt,req,rep for optional, required, or repeated
@@ -1613,6 +1614,7 @@ func (g *Generator) generateEnum(enum *EnumDescriptor) {
 //	enum= the name of the enum type if it is an enum-typed field.
 //	proto3 if this field is in a proto3 message
 //	def= string representation of the default value, if any.
+//
 // The default value must be in a representation that can be used at run-time
 // to generate the default value. Thus bools become 0 and 1, for instance.
 func (g *Generator) goTag(message *Descriptor, field *descriptor.FieldDescriptorProto, wiretype string) string {
@@ -2160,6 +2162,7 @@ type fieldCommon struct {
 	goName     string                           // Go name of field, e.g. "FieldName" or "Descriptor_"
 	protoName  string                           // Name of field in proto language, e.g. "field_name" or "descriptor"
 	getterName string                           // Name of the getter, e.g. "GetFieldName" or "GetDescriptor_"
+	setterName string                           // Name of the setter, e.g. "SetFieldName" or "SetDescriptor_"
 	goType     string                           // The Go type as a string, e.g. "*int32" or "*OtherMessage"
 	tags       string                           // The tag string/annotation for the type, e.g. `protobuf:"varint,8,opt,name=region_id,json=regionId"`
 	fullPath   string                           // The full path of the field as used by Annotate etc, e.g. "4,0,2,0"
@@ -2209,7 +2212,10 @@ func (f *simpleField) getter(g *Generator, mc *msgCtx) {
 
 // setter prints the setter method of the field.
 func (f *simpleField) setter(g *Generator, mc *msgCtx) {
-	// No setter for regular fields yet
+	if f.deprecated != "" {
+		g.P(f.deprecated)
+	}
+	g.generateSet(mc, f.protoField, f.protoType, f.goName, f.goType, f.fullPath, f.setterName)
 }
 
 // getProtoDef returns the default value explicitly stated in the proto file, e.g "yoshi" or "5".
@@ -2306,7 +2312,15 @@ func (f *oneofField) getter(g *Generator, mc *msgCtx) {
 
 // setter prints the setter method of the field.
 func (f *oneofField) setter(g *Generator, mc *msgCtx) {
-	// No setters for oneof yet
+	for _, sf := range f.subFields {
+		if gogoproto.IsEmbed(sf.protoField) || gogoproto.IsCustomType(sf.protoField) {
+			continue
+		}
+		if sf.deprecated != "" {
+			g.P(sf.deprecated)
+		}
+		g.generateSet(mc, sf.protoField, sf.protoType, sf.goName, sf.goType, sf.fullPath, sf.setterName)
+	}
 }
 
 // topLevelField interface implemented by all types of fields on the top level (not oneofSubField).
@@ -2487,6 +2501,28 @@ func (g *Generator) generateGet(mc *msgCtx, protoField *descriptor.FieldDescript
 		g.P("}")
 	}
 	g.P("return ", def)
+	g.Out()
+	g.P("}")
+	g.P()
+}
+
+// generateSet generates the setter for both the simpleField and oneofSubField.
+// We did not want to duplicate the code since it is quite intricate so we came
+// up with this ugly method. At least the logic is in one place. This can be reworked.
+func (g *Generator) generateSet(mc *msgCtx, protoField *descriptor.FieldDescriptorProto, protoType descriptor.FieldDescriptorProto_Type,
+	fname, tname, fullpath, gname string) {
+	if (protoType != descriptor.FieldDescriptorProto_TYPE_MESSAGE) &&
+		(protoType != descriptor.FieldDescriptorProto_TYPE_GROUP) &&
+		needsStar(protoField, g.file.proto3, mc.message != nil && mc.message.allowOneof()) && tname[0] == '*' {
+		tname = tname[1:]
+	}
+	g.P("func (m *", mc.goName, ") ", Annotate(mc.message.file, fullpath, gname), "(f "+tname+")  {")
+	g.P("if m != nil {")
+	g.In()
+	g.P("return *m = " + mc.goName + "{}")
+	g.Out()
+	g.P("}")
+	g.P("m.", fname+" = f")
 	g.Out()
 	g.P("}")
 	g.P()
@@ -2836,8 +2872,8 @@ func (g *Generator) generateMessage(message *Descriptor) {
 		if gogoproto.IsCustomName(field) {
 			base = gogoproto.GetCustomName(field)
 		}
-		ns := allocNames(base, "Get"+base)
-		fieldName, fieldGetterName := ns[0], ns[1]
+		ns := allocNames(base, "Get"+base, "Set"+base)
+		fieldName, fieldGetterName, fieldSetterName := ns[0], ns[1], ns[2]
 
 		typename, wiretype := g.GoType(message, field)
 		jsonName := *field.Name
@@ -2942,6 +2978,7 @@ func (g *Generator) generateMessage(message *Descriptor) {
 				fieldCommon: fieldCommon{
 					goName:     fieldName,
 					getterName: fieldGetterName,
+					setterName: fieldSetterName,
 					goType:     typename,
 					tags:       tag,
 					protoName:  field.GetName(),
@@ -2973,6 +3010,7 @@ func (g *Generator) generateMessage(message *Descriptor) {
 			fieldCommon: fieldCommon{
 				goName:     fieldName,
 				getterName: fieldGetterName,
+				setterName: fieldSetterName,
 				goType:     typename,
 				tags:       tag,
 				protoName:  field.GetName(),
