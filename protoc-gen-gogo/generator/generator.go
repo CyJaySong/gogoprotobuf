@@ -2519,7 +2519,7 @@ func (g *Generator) generateSet(mc *msgCtx, protoField *descriptor.FieldDescript
 	g.P("func (m *", mc.goName, ") ", Annotate(mc.message.file, fullpath, gname), "(f "+tname+")  {")
 	g.P("if m != nil {")
 	g.In()
-	g.P("return *m = " + mc.goName + "{}")
+	g.P("*m = " + mc.goName + "{}")
 	g.Out()
 	g.P("}")
 	g.P("m.", fname+" = f")
